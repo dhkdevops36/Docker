@@ -1,0 +1,102 @@
+jenkins-Docker CICD
+
+Docker@jenkins CICD
+#######################################################################################
+https://gettingstartedwithdocker.hashnode.dev/building-cicd-pipeline-jenkins-and-sonarqube-docker-image-on-ci-server-remote-docker-deployment-via-cd-server
+####################################################################################
+
+squ_90fd89dcc38d016a3bff648250ad68e576280b55
+
+
+
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven-3.9.11'
+    }
+
+    environment {
+        // Use a fixed path instead of env.MAVEN_SETTINGS (safer)
+        MAVEN_SETTINGS = "${WORKSPACE}/settings.xml"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'master',
+                    url: 'https://github.com/dhkdevops36/spring-boot-mongo-docker.git'
+            }
+        }
+
+        stage('Maven settings') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'nexus-creds', // 
+                        usernameVariable: 'NEXUS_USER',
+                        passwordVariable: 'NEXUS_PASS'
+                    )]) {
+                        echo "Writing settings.xml with credentials for user: ${NEXUS_USER}"
+                        writeFile file: "${env.MAVEN_SETTINGS}", text: """
+<settings>
+  <servers>
+    <server>
+      <id>nexus</id>
+      <username>${NEXUS_USER}</username>
+      <password>${NEXUS_PASS}</password>
+    </server>
+  </servers>
+</settings>
+                        """
+                        echo "Generated settings.xml at: ${env.MAVEN_SETTINGS}"
+                        sh "cat ${env.MAVEN_SETTINGS}" // Debug: Confirm file was created
+                    }
+                }
+            }
+        }
+
+        stage('Maven Build') {
+            steps {
+                sh "mvn clean package --settings ${env.MAVEN_SETTINGS}"
+            }
+        }
+
+        stage('SonarQube') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh """
+                        mvn sonar:sonar \
+                        -Dsonar.projectKey=spring-boot-mongo \
+                        -Dsonar.projectName='Spring Boot Mongo Project' \
+                        --settings ${env.MAVEN_SETTINGS}
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to Nexus') {
+            steps {
+                sh "mvn deploy --settings ${env.MAVEN_SETTINGS}"
+            }
+        }
+        stage('Build & Tag Docker Image') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker') {
+                        sh 'docker build -t dhkdevops15/springmongo:latest .'
+                    }
+                }
+            }
+        }
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker') {
+                        sh 'docker push dhkdevops15/springmongo:latest'
+                    }
+                }
+            }
+        }
+    }
+}
